@@ -71,3 +71,18 @@ export function getAnalysisData() {
 export function logOut() {
     return service.post('/user/logout');
 }
+
+//用户端
+
+export function register(data) {
+    return service.post('/user/add', data);
+}
+
+export function newMessage(data) {
+    return service.post('/psychological-chat/session/start', data);
+}
+
+
+export function getSessionList(params) {
+    return service.get('/psychological-chat/sessions', { params });
+}

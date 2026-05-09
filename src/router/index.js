@@ -69,6 +69,29 @@ const frontRoutes = [
     path: '/',
     name: 'front',
     component: () => import('@/components/FrontLayout.vue'),
+    children: [
+      {
+        path: '',
+        name: 'home',
+        component: () => import('@/views/Home.vue')
+      },
+      {
+        path: 'consulation',
+        name: 'consulation',
+        component: () => import('@/views/Consulation.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: 'emotional-diary',
+        name: 'emotional-diary',
+        component: () => import('@/views/EmotionalDiary.vue')
+      },
+      {
+        path: 'knowledge',
+        name: 'RAG_knowledge',
+        component: () => import('@/views/RAG_Knowledge.vue')
+      }
+    ]
   }
 ]
 
@@ -84,7 +107,7 @@ router.beforeEach((to, from, next) => {
   const isAuthRoute = to.path.startsWith('/auth')
 
   if (!token) {
-    if (isBackRoute) {
+    if (isBackRoute || to.meta.requiresAuth) {
       next('/auth/login')
       return
     }

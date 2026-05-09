@@ -48,20 +48,29 @@ const formItem = ref([
 
 const handleSearch = async (formData = {}) => {
   const params = {
-    ...pageParams,
+    currentPage: pageParams.currentPage,
+    size: pageParams.size,
+    current: pageParams.currentPage,
+    pageNum: pageParams.currentPage,
+    pageSize: pageParams.size,
     ...formData,
   };
 
   try {
     const res = await articlePage(params);
-    const realData = res.data || res;
-    const records = realData.records || [];
-    const total = realData.total || 0;
+    const realData = res?.data?.records
+      ? res.data
+      : (res?.data || res || {});
+    const records = realData.records || realData.list || [];
+    const total = realData.total || realData.count || 0;
 
-    pageParams.total = total;
-    tableData.value = records;
+    pageParams.total = Number(total);
+    tableData.value = Array.isArray(records) ? records : [];
   } catch (error) {
     console.error('搜索失败:', error);
+    pageParams.total = 0;
+    tableData.value = [];
+    ElMessage.error('获取文章列表失败');
   }
 };
 
@@ -156,17 +165,24 @@ const formatCategoryTree = (nodes) => {
 };
 
 onMounted(async () => {
+  await handleSearch();
+
   try {
     const data = await categoryTree();
-    const formattedData = formatCategoryTree(data.data);
+    const categoryData = Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data)
+        ? data
+        : [];
+    const formattedData = formatCategoryTree(categoryData);
 
     formItem.value[1].options = formattedData;
     categoryList.value = formattedData;
     console.log('分类树数据:', categoryList);
-
-    handleSearch();
   } catch (error) {
     console.error('获取分类树失败:', error);
+    formItem.value[1].options = [];
+    categoryList.value = [];
   }
 });
 </script>

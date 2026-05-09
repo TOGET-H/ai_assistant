@@ -9,7 +9,7 @@
             <div class="title">
                 <div class="back-home">
                     <el-icon><Back /></el-icon>
-                    <span>返回首页</span>
+                    <span >返回首页</span>
                 </div>
                 <div class="login-title">
                     <h2>欢迎回来</h2>
@@ -99,7 +99,7 @@ const submitForm = () => {
                     if (data.userInfo.userType === 2) {
                         router.push('/back/dashboard');
                     } else {
-                        router.push('/user');
+                        router.push('/');
                     }
                 } else {
                     console.error('登录失败: 未返回token');
