@@ -86,3 +86,11 @@ export function newMessage(data) {
 export function getSessionList(params) {
     return service.get('/psychological-chat/sessions', { params });
 }
+
+export function deleteSession(id) {
+    return service.delete(`/psychological-chat/sessions/${id}`);
+}
+
+export function getSessionMessages(sessionId) {
+    return service.get(`/psychological-chat/sessions/${sessionId}/messages`);
+}

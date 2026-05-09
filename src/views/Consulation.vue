@@ -17,8 +17,10 @@
                 </div>
                 <div class="session-list">
                     <!-- 会话列表项 -->
-                    <div class="session-item" v-for="session in sessionList" :key="session.id" @click="handelSessionClick(session)">
+                    <div class="session-item" v-for="session in sessionList" :key="session.id"
+                        @click="handelSessionClick(session)">
                         <div class="session-info">
+
                             <div class="session-title">
                                 <span>{{ session.sessionTitle }}</span>
                                 <div class="session-meta">
@@ -26,15 +28,23 @@
                                 </div>
                                 <div class="session-preview">{{ session.lastMessageContent }}</div>
                             </div>
+                            <div class="session-actions">
+                                <el-button type="danger" text icon="Delete"
+                                    @click.stop="handeldeleteSession(session.id)" />
+                            </div>
                             <div class="session-stats">
-                               <span>
-                                <el-icon><ChatRound /></el-icon>
-                                {{ session.messageCount || 0 }}
-                               </span>
                                 <span>
-                                <el-icon><Clock /></el-icon>
-                                {{ session.durationMinutes }}
-                               </span>
+                                    <el-icon>
+                                        <ChatRound />
+                                    </el-icon>
+                                    {{ session.messageCount || 0 }}
+                                </span>
+                                <span>
+                                    <el-icon>
+                                        <Clock />
+                                    </el-icon>
+                                    {{ ((session.durationMinutes / 60).toFixed(1)) || 0 }}h
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -72,16 +82,36 @@
                         <div class="message-time">刚刚</div>
                     </div>
                 </div>
-                <div v-for="(msg, index) in messages" :key="index"
-                    :class="['message-item', msg.role === 'user' ? 'user-message' : 'ai-message']">
+
+
+                <div v-for="(msg, index) in messages" :key="msg.id || index"
+                    :class="['message-item', isUserMessage(msg) ? 'user-message' : 'ai-message']">
                     <div class="message-avatar">
-                        <el-image :src="msg.role === 'user' ? like : robotFill" fit="cover"></el-image>
+                        <el-image style="width: 18px; height: 18px;" :src="isUserMessage(msg) ? users : robotFill"
+                            fit="cover"></el-image>
                     </div>
                     <div class="message-content">
                         <div class="message-bubble">
-                            <p>{{ msg.content }}</p>
+
+                            <div v-if="msg.senderType === 2 && isAiTying && !msg.content" class="typing-indicator">
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+
+                            </div>
+
+                            <div v-else-if="msg.isError" class="error-message">
+                                <p>{{ msg.content }}</p>
+                            </div>
+
+                            <MarkdownRenderer v-else-if="msg.senderType === 2 && !msg.isError" :content="msg.content"
+                                :is-ai-message="true" />
+
+                            <p v-else-if="msg.content" v-html="formatMessageContent(msg.content)"> </p>
+
                         </div>
-                        <div class="message-time">{{ msg.time }}</div>
+                        <div class="message-time">{{ msg.senderType === 2 && !msg.isAiTying ? '正在输入中' : msg.createdAt }}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -92,7 +122,8 @@
                 <div class="chat-input">
                     <div class="input-container"></div>
                     <el-input class="message-input" placeholder="请输入您想分享的..." @keyup.enter="sendMessage"
-                        v-model="userMessage" type="textarea" :rows="3" :disabled="isAiTying"></el-input>
+                        v-model="userMessage" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }"
+                        :disabled="isAiTying" maxlength="500" show-word-limit></el-input>
                     <el-button class="send-btn" type="primary" @click="sendMessage">
                         <el-icon>
                             <Promotion />
@@ -108,105 +139,247 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import robotFill from '../assets/images/robot-fill.png';
+import users from '../assets/images/users.png';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 import like from '../assets/images/like.png';
-import { newMessage,getSessionList } from '../api/admin';
-import { ChatRound, Plus, Promotion } from '@element-plus/icons-vue';
-
+import { newMessage, getSessionList, getSessionDetails, deleteSession, getSessionMessages } from '../api/admin';
+import { ChatRound, Clock, Plus, Promotion } from '@element-plus/icons-vue';
+import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 const userMessage = ref('');
 const isAiTying = ref(false);
 const currentSession = ref(null);
 const messages = ref([]);
 const sessionList = ref([]);
 
+const formatMessageContent = (content) => {
+    if (!content) return '';
+    return content.replace(/\n/g, '<br>');
+};
+
+const isUserMessage = (msg) => {
+    return msg.senderType === 'USER' || msg.senderType === 1 || msg.role === 'user';
+};
+
+
+
+const handeldeleteSession = (sessionId) => {
+    ElMessageBox.confirm('确定要删除这个会话吗？', '删除会话', {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+    }).then(() => {
+        deleteSession(sessionId).then(() => {
+            ElMessage.success('会话已删除');
+            getSessionPage();
+            // 如果删除的是当前会话，新建一个临时会话
+            if (currentSession.value?.sessionId === sessionId) {
+                CreatNewSession();
+            }
+        }).catch(err => {
+            ElMessage.error('删除失败');
+            console.error(err);
+        });
+    }).catch(() => {
+        ElMessage.info('已取消删除');
+    });
+};
 
 const handelSessionClick = (session) => {
-    currentSession.value = session;
-}
+    currentSession.value = {
+        sessionId: session.id || session.sessionId,
+        status: 'ACTIVE',
+        sessionTitile: session.sessionTitle || session.sessionTitile
+    };
 
-
+    getSessionMessages(session.id).then(res => {
+        const data = res.data || res;
+        const list = data.records || data.data || data;
+        messages.value = (Array.isArray(list) ? list : []).map(msg => ({
+            id: msg.id,
+            role: msg.senderType === 'USER' || msg.senderType === 1 ? 'user' : 'ai',
+            content: msg.content || msg.message || '',
+            time: msg.createdAt || msg.createTime || ''
+        }));
+    }).catch(err => {
+        console.error('获取会话消息失败:', err);
+        messages.value = res
+    });
+    const sessionData = {
+        sessionId: "session_" + session.id,
+        status: 'ACTIVE',
+        sessionTitile: session.sessionTitle
+    };
+    currentSession.value = sessionData;
+};
 
 const CreatNewSession = () => {
-    const newSession = {
+    currentSession.value = {
         sessionId: Date.now(),
         status: 'TEMP',
         sessionTitile: '新会话'
     };
-    currentSession.value = newSession;
-
+    messages.value = [];
 };
 
-const startNewSwssion = (message) => {
+const startNewSession = (text) => {
     const sessionParams = {
-        initialMessage: message
+        initialMessage: text,
+        sessionTitle: '心理咨询AI助手-' + new Date().toLocaleString()
     };
-    if (currentSession.value.sessionTitile === '新会话') {
-        sessionParams.sessionTitile = '心理咨询AI助手-' + new Date().toLocaleString();
 
-    } else {
-        sessionParams.sessionTitile = currentSession.value.sessionTitile;
-    }
-
-    // 调用接口创建新会话
     newMessage(sessionParams).then(res => {
-
-        const SessionData = {
-            sessionId: res.sessionId,
-            status: res.status,
-            sessionTitile: sessionParams.sessionTitile
+        const data = res.data || res;
+        const sessionData = {
+            sessionId: data.sessionId || data.id,
+            status: data.status || 'ACTIVE',
+            sessionTitile: data.sessionTitle || sessionParams.sessionTitle
         };
-
-        //如果当前是临时会话，更新数据
-        if (currentSession.value.status === 'TEMP') {
-            Object.assign(currentSession.value, SessionData);
-        }else{
-            currentSession.value = SessionData;
-        }
-
+        Object.assign(currentSession.value, sessionData);
         getSessionPage();
-    })
-}
+
+        messages.value.push({
+            id: 'user_' + Date.now(),
+            senderType: 1,
+            content: text,
+            createdAt: new Date().toLocaleTimeString()
+        });
 
 
-const getSessionPage = () => {
-    // 调用接口获取会话列表
-    getSessionList({
-        pageNum:1,
-        pageSize:10
-    }).then(res => {
-        console.log('会话列表：', res);
-        sessionList.value = res.records 
-    })
-    
+        startAiResponse(currentSession.value.sessionId, text);
+    }).catch(err => {
+        ElMessage.error('发送失败，请重试');
+        console.error(err);
+        isAiTying.value = false;
+    });
 };
 
-const sendMessage = () => {
-    const text = userMessage.value.trim();
-    if (text === '') {
-        return;
-    }
-
-    if (isAiTying.value) {
-        ElMessage.warning('AI正在输入，请稍后...');
-        return;
-    }
-
-    const message = userMessage.value.trim();
-
-    userMessage.value = '';
+const startAiResponse = (sessionId, userMessage) => {
     isAiTying.value = true;
 
-    if (currentSession.value.status === 'TEMP') {
-        startNewSwssion(message);
-    }
+    messages.value.push({
+        id: 'ai_' + Date.now(),
+        senderType: 2,
+        content: '',
+        createdAt: new Date().toLocaleTimeString(),
+        isError: false
+    });
+    const aiMessage = messages.value[messages.value.length - 1];
 
+    const token = localStorage.getItem('token');
+
+    fetchEventSource('/api/psychological-chat/stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Token': token || ''
+        },
+        body: JSON.stringify({
+            sessionId: String(sessionId),
+            userMessage: userMessage
+        }),
+        onopen(response) {
+            console.log('[SSE] 连接建立, status:', response.status);
+            if (!response.ok) {
+                aiMessage.isError = true;
+                aiMessage.content = '连接失败: HTTP ' + response.status;
+                throw new Error('HTTP ' + response.status);
+            }
+        },
+        onmessage(event) {
+            const raw = event.data.trim();
+            if (!raw) return;
+            if (event.event === 'done' || raw === '[DONE]') {
+                isAiTying.value = false;
+                return;
+            }
+            try {
+                const payload = JSON.parse(raw);
+                console.log('[SSE] 收到:', payload);
+                if (String(payload.code) === '200' && payload.data) {
+                    const chunk = payload.data.content || payload.data.message || payload.data.text || '';
+                    aiMessage.content += chunk;
+                } else if (payload.content) {
+                    aiMessage.content += payload.content;
+                } else if (payload.data) {
+                    aiMessage.content += typeof payload.data === 'string' ? payload.data : '';
+                } else {
+                    aiMessage.isError = true;
+                    aiMessage.content = payload.message || payload.msg || 'AI响应出错了';
+                    isAiTying.value = false;
+                }
+            } catch {
+                aiMessage.content += raw;
+            }
+        },
+        onerror(err) {
+            console.error('[SSE] 错误:', err);
+            aiMessage.isError = true;
+            aiMessage.content = '连接发生错误，请稍后再试';
+            isAiTying.value = false;
+            throw err;
+        },
+        onclose() {
+            console.log('[SSE] 连接关闭');
+            isAiTying.value = false;
+        }
+    });
 };
 
-onMounted(() => {
-    CreatNewSession();
-    getSessionPage();
-});
+    const sendFollowUp = (text) => {
+        startAiResponse(currentSession.value.sessionId, text);
+    };
+
+    const getSessionPage = () => {
+        getSessionList({
+            pageNum: 1,
+            pageSize: 10
+        }).then(res => {
+        
+            const list = res.data?.records || res.records || res.data || res;
+            sessionList.value = Array.isArray(list) ? list : [];
+        }).catch(err => {
+            console.error('获取会话列表失败:', err);
+        });
+    };
+
+    const sendMessage = () => {
+        const text = userMessage.value.trim();
+        if (text === '') {
+            return;
+        }
+
+        if (isAiTying.value) {
+            ElMessage.warning('AI正在输入，请稍后...');
+            return;
+        }
+
+        if (!currentSession.value) {
+            ElMessage.error('会话未初始化，请刷新页面');
+            return;
+        }
+
+        messages.value.push({
+            role: 'user',
+            content: text,
+            time: new Date().toLocaleTimeString()
+        });
+
+        userMessage.value = '';
+        isAiTying.value = true;
+
+        if (currentSession.value.status === 'TEMP') {
+            startNewSession(text);
+        } else {
+            sendFollowUp(text);
+        }
+    };
+
+    onMounted(() => {
+        CreatNewSession();
+        getSessionPage();
+    });
 </script>
 
 <style scoped lang="scss">
@@ -780,13 +953,23 @@ onMounted(() => {
             padding: 20px 24px;
             display: flex;
             gap: 12px;
-            align-items: flex-end;
+
             background: linear-gradient(135deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 252, 248, 0.7) 100%);
             backdrop-filter: blur(10px);
             flex-shrink: 0;
 
             .input-container {
                 flex: 1;
+            }
+
+            .message-input {
+                flex: 2;
+                width: 100%;
+
+                :deep(textarea) {
+                    resize: none;
+                    min-height: 40px;
+                }
             }
 
             .input-footer {
