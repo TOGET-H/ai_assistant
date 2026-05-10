@@ -11,6 +11,61 @@
                     在线
                 </div>
             </div>
+
+            <div class="emotion-garden">
+                <div class="garden-header">
+                    <div class="garden-title">情绪花园</div>
+                </div>
+                <div class="emotion-info">
+                    <div class="emotion-name">{{ currentEmotion.primaryEmotion }}</div>
+                    <div class="emotion-score">{{ currentEmotion.emotionScore }}</div>
+                </div>
+                <div class="warm-tips">
+                    <div class="emotion-status-text">
+                        <span class="status-label">今天感觉 </span>
+                        <span class="status-emotion">{{ currentEmotion.isNegative || currentEmotion.riskLevel > 0 ? '需要关注' : '很不错' }}</span>
+                    </div>
+                    <div class="emotion-intensity">
+                        <span class="intensity-dots">
+                            <span class="dot" v-for="(dot, index) in 3" :key="index"
+                                :class="{ active: index < getIntensityClass(currentEmotion.emotionScore) }"></span>
+                        </span>
+                        <span class="intensity-text">{{ getRiskLevelText(currentEmotion.riskLevel) }}</span>
+                    </div>
+                    <div class="warm-suggestion" v-if="currentEmotion.suggestion">
+                        <div class="suggestion-icon">💝</div>
+                        <div class="suggestion-content">
+                            <div class="suggestion-title">给你的小建议哦：</div>
+                            <div class="suggestion-text">{{ currentEmotion.suggestion }}</div>
+                        </div>
+                    </div>
+
+
+                    <!-- // -->
+
+                        <div class="healing-actions" v-if="healingActions.length > 0">
+                            <div class="actions-title">
+                                <span>治愈小行动</span>
+                            </div>
+                            <div class="actions-list">
+                                <div class="action-item" v-for="(action, idx) in healingActions" :key="idx">
+                                    <div class="action-icon">✨</div>
+                                    <div class="action-text">{{ action }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                    <div class="risk-notice" v-if="riskNotice" :class="`risk-level-${riskNotice.level}`">
+                        <div class="notice-icon">{{ riskNotice.icon }}</div>
+                        <div class="notice-content">
+                            <div class="notice-title">{{ riskNotice.title }}</div>
+                            <div class="notice-text">{{ riskNotice.text }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+
             <div class="session-history">
                 <div class="section-title">
                     <span>会话列表</span>
@@ -120,7 +175,6 @@
             <div>
                 <!-- 输入框和发送按钮 -->
                 <div class="chat-input">
-                    <div class="input-container"></div>
                     <el-input class="message-input" placeholder="请输入您想分享的..." @keyup.enter="sendMessage"
                         v-model="userMessage" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }"
                         :disabled="isAiTying" maxlength="500" show-word-limit></el-input>
@@ -138,13 +192,13 @@
 
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import robotFill from '../assets/images/robot-fill.png';
 import users from '../assets/images/users.png';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import like from '../assets/images/like.png';
-import { newMessage, getSessionList, getSessionDetails, deleteSession, getSessionMessages } from '../api/admin';
+import { newMessage, getSessionList, getSessionDetails, deleteSession, getSessionMessages, getSessionEmotion } from '../api/admin';
 import { ChatRound, Clock, Plus, Promotion } from '@element-plus/icons-vue';
 import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 const userMessage = ref('');
@@ -153,6 +207,207 @@ const currentSession = ref(null);
 const messages = ref([]);
 const sessionList = ref([]);
 
+
+const defaultEmotion = {
+    primaryEmotion: '中性',
+    emotionScore: 50,
+    isNegative: false,
+    suggestion: '保持积极的心态，适当运动，和朋友聊聊天，都是不错的选择哦！',
+    improvementSuggestions: [],
+    riskLevel: 0,
+    riskDescription: ''
+};
+
+const createDefaultEmotion = () => ({
+    ...defaultEmotion,
+    improvementSuggestions: [...defaultEmotion.improvementSuggestions]
+});
+
+const parseJsonSafe = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return null;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
+};
+
+const normalizeNumber = (value, fallback) => {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
+const normalizeBoolean = (value, fallback = false) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['true', '1', 'yes', 'negative', '是', '负向'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'positive', '否', '正向'].includes(normalized)) return false;
+    }
+    return fallback;
+};
+
+const normalizeList = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+        return value.map((item) => String(item).trim()).filter(Boolean);
+    }
+    const parsed = parseJsonSafe(value);
+    if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean);
+    }
+    if (typeof parsed === 'object' && parsed !== null) {
+        return normalizeList(Object.values(parsed));
+    }
+    if (typeof value === 'string') {
+        return value
+            .split(/[\n；;。]+/)
+            .map((item) => item.replace(/^\s*\d+[.、]\s*/, '').trim())
+            .filter(Boolean);
+    }
+    return [];
+};
+
+const normalizeRiskLevel = (value, emotionScore, isNegative) => {
+    if (value !== undefined && value !== null && value !== '') {
+        const numberValue = Number(value);
+        if (Number.isFinite(numberValue)) {
+            return Math.max(0, Math.min(3, numberValue));
+        }
+
+        const riskMap = {
+            NORMAL: 0,
+            NONE: 0,
+            LOW: 1,
+            CONCERN: 1,
+            ATTENTION: 1,
+            MEDIUM: 2,
+            WARNING: 2,
+            HIGH: 3,
+            CRISIS: 3,
+            DANGER: 3,
+            正常: 0,
+            无: 0,
+            低风险: 1,
+            关注: 1,
+            中风险: 2,
+            预警: 2,
+            高风险: 3,
+            危机: 3
+        };
+        const normalized = String(value).trim().toUpperCase();
+        return riskMap[normalized] ?? riskMap[String(value).trim()] ?? 0;
+    }
+
+    if (emotionScore < 31) return 3;
+    if (emotionScore < 61 && isNegative) return 2;
+    return 0;
+};
+
+const normalizeEmotionData = (payload) => {
+    const rawPayload = parseJsonSafe(payload) || payload || {};
+    const nestedAnalysis =
+        parseJsonSafe(rawPayload.aiEmotionAnalysis) ||
+        parseJsonSafe(rawPayload.aiAnalysis) ||
+        parseJsonSafe(rawPayload.emotionAnalysis) ||
+        rawPayload.analysis ||
+        {};
+    const data = {
+        ...rawPayload,
+        ...(typeof nestedAnalysis === 'object' ? nestedAnalysis : {})
+    };
+
+    const emotionScore = normalizeNumber(
+        data.emotionScore ?? data.score ?? data.moodScore,
+        defaultEmotion.emotionScore
+    );
+    const isNegative = normalizeBoolean(data.isNegative ?? data.negative, emotionScore < 61);
+    const riskLevel = normalizeRiskLevel(data.riskLevel ?? data.riskStatus ?? data.risk, emotionScore, isNegative);
+
+    return {
+        primaryEmotion: data.primaryEmotion || data.aiEmotion || data.dominantEmotion || defaultEmotion.primaryEmotion,
+        emotionScore,
+        isNegative,
+        suggestion: data.suggestion || data.recommendation || '',
+        improvementSuggestions: normalizeList(
+            data.improvementSuggestions ??
+            data.improvementSuggestion ??
+            data.healingActions ??
+            data.actions
+        ),
+        riskLevel,
+        riskDescription: data.riskDescription || data.riskDesc || data.riskMessage || ''
+    };
+};
+
+//情绪花园
+const currentEmotion = ref(createDefaultEmotion());
+
+const healingActions = computed(() => currentEmotion.value.improvementSuggestions || []);
+
+const getRiskLevelText = (riskLevel) => {
+    const riskTextMap = {
+        0: '正常',
+        1: '关注',
+        2: '预警',
+        3: '危机'
+    };
+    return riskTextMap[Number(riskLevel)] || '未知';
+};
+
+const riskNotice = computed(() => {
+    const level = Number(currentEmotion.value.riskLevel || 0);
+    const text = currentEmotion.value.riskDescription;
+
+    if (level <= 0 && !text) {
+        return null;
+    }
+
+    const fallbackTextMap = {
+        1: '您当前的情绪状态需要关注，请注意调节。',
+        2: '您当前的情绪状态处于预警状态，请优先照顾自己的感受。',
+        3: '您当前的情绪状态处于危机状态，建议及时寻求专业帮助。'
+    };
+
+    return {
+        level,
+        icon: level >= 3 ? '⚠️' : '💡',
+        title: level >= 3 ? '风险提示' : level === 2 ? '预警提示' : '温馨提示',
+        text: text || fallbackTextMap[level] || '请关注当前的情绪变化，必要时寻求支持。'
+    };
+});
+
+const loadSessionEmotion=(sessionId)=>{
+    if (!sessionId) {
+        currentEmotion.value = createDefaultEmotion();
+        return;
+    }
+
+    getSessionEmotion(sessionId).then(res => {
+        const data = res.data || res;
+        if (data) {
+            currentEmotion.value = normalizeEmotionData(data);
+        }
+    }).catch(err => {
+        console.error('获取情绪数据失败:', err);
+        currentEmotion.value = createDefaultEmotion();
+    });
+}
+
+const getIntensityClass = (score) => {
+   if (score >= 61) {
+        return 3; // 高强度显示所有点
+    } else if (score >= 31) {
+        return 2; // 中强度显示前两个点
+    } else {
+        return 1; // 低强度只显示第一个点
+    }
+};
+
+
 const formatMessageContent = (content) => {
     if (!content) return '';
     return content.replace(/\n/g, '<br>');
@@ -160,6 +415,16 @@ const formatMessageContent = (content) => {
 
 const isUserMessage = (msg) => {
     return msg.senderType === 'USER' || msg.senderType === 1 || msg.role === 'user';
+};
+
+const appendUserMessage = (content) => {
+    messages.value.push({
+        id: 'user_' + Date.now(),
+        senderType: 1,
+        role: 'user',
+        content,
+        createdAt: new Date().toLocaleTimeString()
+    });
 };
 
 
@@ -204,7 +469,7 @@ const handelSessionClick = (session) => {
         }));
     }).catch(err => {
         console.error('获取会话消息失败:', err);
-        messages.value = res
+        messages.value = [];
     });
     const sessionData = {
         sessionId: "session_" + session.id,
@@ -212,6 +477,7 @@ const handelSessionClick = (session) => {
         sessionTitile: session.sessionTitle
     };
     currentSession.value = sessionData;
+    loadSessionEmotion(session.id);
 };
 
 const CreatNewSession = () => {
@@ -221,6 +487,7 @@ const CreatNewSession = () => {
         sessionTitile: '新会话'
     };
     messages.value = [];
+    currentEmotion.value = createDefaultEmotion();
 };
 
 const startNewSession = (text) => {
@@ -239,14 +506,6 @@ const startNewSession = (text) => {
         Object.assign(currentSession.value, sessionData);
         getSessionPage();
 
-        messages.value.push({
-            id: 'user_' + Date.now(),
-            senderType: 1,
-            content: text,
-            createdAt: new Date().toLocaleTimeString()
-        });
-
-
         startAiResponse(currentSession.value.sessionId, text);
     }).catch(err => {
         ElMessage.error('发送失败，请重试');
@@ -254,6 +513,7 @@ const startNewSession = (text) => {
         isAiTying.value = false;
     });
 };
+
 
 const startAiResponse = (sessionId, userMessage) => {
     isAiTying.value = true;
@@ -292,6 +552,7 @@ const startAiResponse = (sessionId, userMessage) => {
             if (!raw) return;
             if (event.event === 'done' || raw === '[DONE]') {
                 isAiTying.value = false;
+                loadSessionEmotion(sessionId);
                 return;
             }
             try {
@@ -323,6 +584,7 @@ const startAiResponse = (sessionId, userMessage) => {
         onclose() {
             console.log('[SSE] 连接关闭');
             isAiTying.value = false;
+            loadSessionEmotion(sessionId);
         }
     });
 };
@@ -360,11 +622,7 @@ const startAiResponse = (sessionId, userMessage) => {
             return;
         }
 
-        messages.value.push({
-            role: 'user',
-            content: text,
-            time: new Date().toLocaleTimeString()
-        });
+        appendUserMessage(text);
 
         userMessage.value = '';
         isAiTying.value = true;
@@ -758,35 +1016,37 @@ const startAiResponse = (sessionId, userMessage) => {
                 }
 
                 .risk-notice {
-                    background: linear-gradient(135deg, #fff9e6, #ffeaa7);
-                    border-radius: 16px;
-                    padding: 16px;
+                    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+                    border-radius: 12px;
+                    padding: 12px;
                     display: flex;
-                    align-items: flex-start;
-                    gap: 12px;
-                    border: 1px solid rgba(255, 234, 167, 0.6);
-                    box-shadow: 0 6px 20px rgba(255, 234, 167, 0.3);
+                    align-items: center;
+                    gap: 10px;
+                    border: 1px solid rgba(255, 255, 255, 0.5);
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+                    text-align: left;
 
                     .notice-icon {
-                        font-size: 20px;
+                        font-size: 14px;
+                        color: #ffd700;
                         flex-shrink: 0;
-                        margin-top: 2px;
                     }
 
                     .notice-content {
                         flex: 1;
 
                         .notice-title {
-                            font-size: 14px;
+                            font-size: 12px;
                             font-weight: 600;
-                            color: #d4840f;
-                            margin-bottom: 6px;
+                            color: #6b5b47;
+                            line-height: 1.4;
+                            margin-bottom: 4px;
                         }
 
                         .notice-text {
-                            font-size: 13px;
-                            color: #b8740c;
-                            line-height: 1.5;
+                            font-size: 12px;
+                            color: #6b5b47;
+                            line-height: 1.4;
                         }
                     }
                 }
@@ -958,12 +1218,8 @@ const startAiResponse = (sessionId, userMessage) => {
             backdrop-filter: blur(10px);
             flex-shrink: 0;
 
-            .input-container {
-                flex: 1;
-            }
-
             .message-input {
-                flex: 2;
+                flex: 1;
                 width: 100%;
 
                 :deep(textarea) {
@@ -993,6 +1249,48 @@ const startAiResponse = (sessionId, userMessage) => {
 
         }
 
+    }
+}
+
+@keyframes breathing {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 6px 24px rgba(251, 146, 60, 0.25);
+    }
+    50% {
+        transform: scale(1.08);
+        box-shadow: 0 8px 32px rgba(251, 146, 60, 0.4);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.4;
+    }
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes typing {
+    0%, 100% {
+        opacity: 0.2;
+        transform: scale(0.8);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1);
     }
 }
 </style>
