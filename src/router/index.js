@@ -89,7 +89,8 @@ const frontRoutes = [
       {
         path: 'knowledge',
         name: 'RAG_knowledge',
-        component: () => import('@/views/RAG_Knowledge.vue')
+        component: () => import('@/views/RAG_Knowledge.vue'),
+        meta: { requiresAuth: true }
       }
     ]
   }

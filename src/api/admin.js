@@ -98,3 +98,15 @@ export function getSessionMessages(sessionId) {
 export function getSessionEmotion(sessionId) {
     return service.get(`/psychological-chat/session/${sessionId}/emotion`);
 }
+
+export function emotionalDiary(data) {
+    return service.post('/emotion-diary', data);
+}
+
+export function getKnowledgeList(params) {
+    return service.get('/knowledge/article/page', { params });
+}
+
+export function getKnowledgeDetails(articleId) {
+    return service.get(`/knowledge/article/${articleId}`);
+}
